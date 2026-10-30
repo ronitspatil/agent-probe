@@ -27,7 +27,8 @@ MCP tool calls are disabled by default. Agent endpoints can execute their own to
 use an isolated harness. A clean report is not proof that an agent is secure.
 
 Read the [CLI guide](docs/usage.md), [adapter contract](docs/integrations.md),
-[coverage and evidence limits](docs/coverage.md), and [development guide](docs/development.md).
+[coverage and evidence limits](docs/coverage.md), [synthetic calibration](docs/calibration.md),
+and [development guide](docs/development.md).
 
 ```sh
 pip install -e '.[dev]'

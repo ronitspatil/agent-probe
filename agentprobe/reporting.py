@@ -4,6 +4,7 @@ import os
 import tempfile
 from pathlib import Path
 
+from pydantic import BaseModel
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
@@ -11,7 +12,7 @@ from rich.text import Text
 from agentprobe.models import ResultStatus, VulnerabilityReport
 
 
-def write_report(report: VulnerabilityReport, path: Path) -> None:
+def write_report(report: BaseModel, path: Path) -> None:
     # A temporary sibling permits atomic replacement; mkstemp uses mode 0600.
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:

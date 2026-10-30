@@ -29,3 +29,4 @@ jobs:
       - run: mypy agentprobe
       - run: python -m build
       - run: agentprobe --help
+      - run: agentprobe calibrate --output "$RUNNER_TEMP/agentprobe-calibration.json"
