@@ -75,3 +75,12 @@ Semantic detection is optional: install `pip install -e '.[semantic]'`, then use
 `--semantic-model` with a reviewed local model path or model identifier. Loading a
 remote model identifier may download weights. Cosine similarity is always reported
 as heuristic evidence; it cannot confirm execution.
+
+
+## Local calibration
+
+`agentprobe calibrate --output calibration.json` starts disposable loopback fixtures,
+measures scanner results against independent synthetic tool audit records, and stops
+the servers. `agentprobe sandbox --mode protected --port 8765` serves a fixture until
+interrupted. See [synthetic calibration](calibration.md) for modes, metrics, expected
+false positives and false negatives, and the distinction from real-model testing.

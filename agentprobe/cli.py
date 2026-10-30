@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal, cast
@@ -13,11 +14,13 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from agentprobe.calibration import run_calibration
 from agentprobe.demo import demo_transport
 from agentprobe.evaluators import DetectionEngine, SentenceTransformerProvider
 from agentprobe.models import MCPFixture, PayloadCategory, ScanConfig, VulnerabilityReport
 from agentprobe.payloads import build_registry
 from agentprobe.reporting import exit_code, render_report, write_report
+from agentprobe.sandbox import Sandbox, SandboxMode
 from agentprobe.scanners import AgentScanner, MCPScanner
 from agentprobe.scanners.base import safe_error
 from agentprobe.scanners.http import redact_url, validate_url
@@ -249,3 +252,76 @@ def payloads() -> None:
     for case in build_registry():
         table.add_row(case.id, case.category.value, ", ".join(case.owasp), str(len(case.turns)))
     console.print(table)
+
+
+@app.command()
+def sandbox(
+    mode: Annotated[
+        SandboxMode, typer.Option(help="Synthetic authorization enforcement mode.")
+    ] = SandboxMode.PROTECTED,
+    port: Annotated[
+        int, typer.Option(min=0, max=65535, help="Loopback port; 0 selects a free port.")
+    ] = 0,
+) -> None:
+    """Serve a deterministic synthetic agent and MCP fixture on loopback until interrupted."""
+    try:
+        with Sandbox(mode, port) as fixture:
+            console.print(Text(f"Synthetic {mode.value} sandbox: {fixture.url}"))
+            console.print(
+                "Routes: /agent, /mcp, /audit. All effects stay in memory. Ctrl-C stops it."
+            )
+            threading.Event().wait()
+    except KeyboardInterrupt:
+        console.print("Sandbox stopped; disposable state released.")
+    except OSError as exc:
+        console.print(Text(f"Could not start loopback sandbox ({type(exc).__name__})."))
+        raise typer.Exit(2) from exc
+
+
+@app.command()
+def calibrate(
+    output: Annotated[Path, typer.Option(help="Synthetic calibration JSON destination.")] = Path(
+        "calibration.json"
+    ),
+) -> None:
+    """Measure synthetic boundary detection using real loopback HTTP and independent audit."""
+    try:
+        report = asyncio.run(run_calibration())
+        write_report(report, output)
+    except Exception as exc:
+        console.print(Text(f"Calibration failed: {safe_error(exc)}"))
+        raise typer.Exit(2) from exc
+    table = Table(
+        "Group", "Dimension", "TP", "FP", "TN", "FN", "Excluded", title="Synthetic calibration"
+    )
+    for group, metrics in report.metrics.items():
+        for dimension, matrix in metrics.items():
+            table.add_row(
+                group,
+                dimension,
+                *(
+                    str(value)
+                    for value in (
+                        matrix.tp,
+                        matrix.fp,
+                        matrix.tn,
+                        matrix.fn,
+                        matrix.excluded,
+                    )
+                ),
+            )
+    console.print(table)
+    console.print(
+        Text(
+            f"{len(report.samples)} samples; {len(report.mismatches)} mismatches "
+            f"({report.unexpected_mismatches} unexpected); "
+            f"{len(report.incomplete_samples)} incomplete; "
+            f"{len(report.integrity_errors)} fixture integrity errors."
+        )
+    )
+    for issue in report.integrity_errors:
+        console.print(Text(issue))
+    for limitation in report.limitations:
+        console.print(Text(limitation))
+    console.print(Text(f"Report saved to {output}"))
+    raise typer.Exit(report.exit_code)
