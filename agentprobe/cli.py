@@ -23,6 +23,11 @@ from agentprobe.model_eval import (
     preview_request_budget,
     run_model_evaluation,
 )
+from agentprobe.model_planner import (
+    MAX_PLAN_STEPS,
+    preview_provider_budget,
+    run_model_plan,
+)
 from agentprobe.models import MCPFixture, PayloadCategory, ScanConfig, VulnerabilityReport
 from agentprobe.payloads import build_registry
 from agentprobe.reporting import exit_code, render_report, write_report
@@ -429,3 +434,94 @@ def calibrate_model(
     console.print(Text(f"Report saved to {output}; metrics: {report.metrics}"))
     if report.metrics["incomplete"]:
         raise typer.Exit(2)
+
+
+@app.command("model-plan")
+def model_plan(
+    endpoint: Annotated[
+        str, typer.Option(help="OpenAI-compatible /chat/completions planner endpoint URL.")
+    ],
+    model: Annotated[str, typer.Option(help="Provider model identifier.")],
+    output: Annotated[Path, typer.Option(help="Owner-readable JSON report destination.")] = Path(
+        "model-plan.json"
+    ),
+    execute: Annotated[
+        bool,
+        typer.Option(help="Send provider requests; without this flag the command is preview-only."),
+    ] = False,
+    credential_env: Annotated[
+        str, typer.Option(help="Environment variable containing provider API credential.")
+    ] = "AGENTPROBE_API_KEY",
+    max_steps: Annotated[int, typer.Option(min=1, max=MAX_PLAN_STEPS)] = 5,
+    max_tokens: Annotated[int, typer.Option(min=1, max=512)] = 256,
+    request_timeout: Annotated[float, typer.Option(min=0.1, max=120.0)] = 30.0,
+    mode: Annotated[
+        SandboxMode, typer.Option(help="Local fixture enforcement mode; protected by default.")
+    ] = SandboxMode.PROTECTED,
+) -> None:
+    """Let a model choose registered probes for the local synthetic sandbox."""
+    try:
+        settings = ModelSettings(
+            endpoint=endpoint,
+            model=model,
+            temperature=0.0,
+            top_p=1.0,
+            max_tokens=max_tokens,
+            request_timeout=request_timeout,
+            max_tool_rounds=0,
+        )
+        token_ceiling = preview_provider_budget(max_steps, max_tokens)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    console.print(
+        Text(
+            f"Model: {model}; mode: {mode.value}; registered cases: {len(build_registry())}; "
+            f"maximum planner requests: {max_steps}; max tokens/request: {max_tokens}; "
+            f"maximum generated-token ceiling: {token_ceiling}; "
+            f"provider timeout/request: {request_timeout:g}s."
+        )
+    )
+    if not execute:
+        console.print("Preview only. Add --execute to send requests; provider charges may apply.")
+        return
+
+    try:
+        token = load_token(credential_env)
+        if not token:
+            raise ValueError(
+                f"Credential environment variable {credential_env!r} is unset or empty."
+            )
+        report = asyncio.run(
+            run_model_plan(
+                settings,
+                token=token,
+                max_steps=max_steps,
+                mode=mode,
+            )
+        )
+        write_report(report, output)
+    except Exception as exc:
+        console.print(Text(f"Model planning failed: {safe_error(exc)}"))
+        raise typer.Exit(2) from exc
+
+    table = Table("Step", "Action", "Case", "Scanner", "Evidence", "Dispatcher", "Executed")
+    for step in report.steps:
+        table.add_row(
+            str(step.sequence),
+            step.action,
+            step.case_id or "-",
+            step.observation.status.value if step.observation else "-",
+            ", ".join(sorted({item.detector for item in step.observation.evidence}))
+            if step.observation
+            else "-",
+            str(len(step.oracle_records)),
+            str(sum(record.executed for record in step.oracle_records)),
+        )
+    console.print(table)
+    if report.error:
+        console.print(Text(f"Planner stopped: {report.error}"))
+    console.print(
+        Text(f"Report saved to {output}; provider requests: {len(report.provider_traces)}")
+    )
+    raise typer.Exit(report.scanner_exit_code())
