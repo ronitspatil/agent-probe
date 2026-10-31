@@ -84,3 +84,8 @@ measures scanner results against independent synthetic tool audit records, and s
 the servers. `agentprobe sandbox --mode protected --port 8765` serves a fixture until
 interrupted. See [synthetic calibration](calibration.md) for modes, metrics, expected
 false positives and false negatives, and the distinction from real-model testing.
+
+Model-backed trials use a separate command and send requests only with the explicit
+`--execute` flag. The command prints its maximum request budget in preview mode. Read
+the credential, cost, and data handling notes in [synthetic calibration](calibration.md)
+before opting in.

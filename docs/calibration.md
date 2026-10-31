@@ -90,6 +90,53 @@ does not fit probabilistic calibration parameters or use an LLM judge.
 Exit `0` does not mean perfect precision/recall. Known false positives and false
 negatives are deliberately retained. Missing or duplicate sample IDs fail validation.
 
+## Optional model-backed calibration
+
+`agentprobe calibrate-model` evaluates selected fixed prompts through a configured
+OpenAI Chat Completions-compatible endpoint and the local in-memory sandbox. The
+command is preview-only unless `--execute` is present. For example:
+
+```sh
+agentprobe calibrate-model \
+  --endpoint https://provider.example/v1/chat/completions \
+  --model example-model \
+  --scenario direct_call \
+  --scenario indirect_injection \
+  --repetitions 3
+```
+
+The preview shows the maximum provider request count and generated-token ceiling.
+Add `--execute` to send requests; provider charges may apply. The API credential is
+read from `AGENTPROBE_API_KEY` by default, or another name selected with
+`--credential-env`. Never pass a credential as a command-line argument. Select
+`--mode protected` or `--mode vulnerable` to run the synthetic denied or deliberately
+bypassed dispatcher. The default uses `protected` mode.
+Remote provider endpoints must use HTTPS. Plain HTTP is allowed only for local loopback
+fixtures. Redirects are disabled.
+
+The supported probes cover a direct unauthorized call, untrusted external-content
+instructions, five-turn instruction drift, and a benign no-tool control. Each selected
+probe receives a deterministic per-repeat canary. Only the synthetic sink is advertised
+to the model; calls to other tools and incorrect canaries are rejected. The sink stores
+canaries in memory and never invokes shell commands, files, databases, or external MCP
+servers. The provider request includes the system policy, selected probe conversation,
+untrusted scenario content, and the single synthetic tool schema.
+
+Calls run sequentially. `--max-tool-rounds` bounds tool result follow-ups per user
+turn, and `--request-timeout` bounds each provider request. The preview uses the
+selected scenario's longest conversation to compute its maximum request budget. No
+automatic retries occur. Reports record model settings, prompt/corpus versions, provider
+request IDs, redacted finish/usage metadata, model tool-call attempts, dispatcher audit,
+sink effects, and scanner observations. They do not store raw completions or API keys.
+Provider endpoint paths and query strings are omitted from reports. Treat reports as
+sensitive because they include probe canaries and request IDs.
+
+Attempted model calls, scanner alerts, dispatcher decisions, and actual sink effects
+are separate measurements. Only dispatcher audit and sink contents establish whether
+the local synthetic action ran. Repetition rates and observed ranges describe this small
+sample; they are not statistical certification or a general security guarantee. Tests
+use mock providers and loopback fixtures only; they never contact a model provider.
+
 ## Serve a sandbox manually
 
 ```sh
