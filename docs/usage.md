@@ -89,3 +89,7 @@ Model-backed trials use a separate command and send requests only with the expli
 `--execute` flag. The command prints its maximum request budget in preview mode. Read
 the credential, cost, and data handling notes in [synthetic calibration](calibration.md)
 before opting in.
+
+`agentprobe model-plan` lets a model choose the next test from registered case IDs and
+adapt its selections to prior results. It runs only against the local sandbox; preview
+is the default, and provider requests require `--execute`.

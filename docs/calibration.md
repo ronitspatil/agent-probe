@@ -137,6 +137,43 @@ the local synthetic action ran. Repetition rates and observed ranges describe th
 sample; they are not statistical certification or a general security guarantee. Tests
 use mock providers and loopback fixtures only; they never contact a model provider.
 
+## Model-driven scan planning
+
+`agentprobe model-plan` lets a model select the next test from the registered case
+catalog based on prior scan summaries:
+
+```sh
+agentprobe model-plan \
+  --endpoint https://provider.example/v1/chat/completions \
+  --model example-model \
+  --max-steps 5 \
+  --max-tokens 256
+```
+
+The command is preview-only unless `--execute` is supplied. Preview shows the maximum
+provider request count and token ceiling. Requests can incur provider charges; credentials
+come from `AGENTPROBE_API_KEY` by default, not a command-line argument. Remote endpoints
+must use HTTPS; plain HTTP is limited to local loopback fixtures.
+
+The model receives registered IDs, titles, categories, and OWASP labels, plus prior case
+IDs, statuses, and evidence detector names. It does not receive probe payloads, raw scan
+responses, tool arguments, credentials, or arbitrary target data. It can select an unused
+registered case or stop. Unknown IDs, repeated IDs, malformed decisions, extra fields,
+and tool calls are rejected. It cannot set URLs, tools, or payloads.
+
+Selected probes execute only against the local loopback sandbox. The protected
+in-memory canary sink is the default. Vulnerable mode is a fixture-only comparison and
+still stores effects in memory. No remote agent endpoint, MCP server, shell, database,
+or filesystem tool is called. Python validates choices, executes registered cases, and
+records independent dispatcher truth; the model chooses test order and adapts to prior
+summaries. Existing `scan`, `calibrate`, and `calibrate-model` behavior is unchanged.
+
+`--max-steps` bounds provider decisions to 1–20, and `--max-tokens` bounds each response
+to 1–512 tokens. Calls are sequential, timed out, and never retried. Reports contain
+planner settings and request metadata but not planner completions or rationale. Scanner
+evidence can include canary markers, so treat reports as sensitive. Automated tests use
+mock providers and loopback fixtures; they do not make live model requests.
+
 ## Serve a sandbox manually
 
 ```sh

@@ -26,8 +26,8 @@ agentprobe scan --target http://127.0.0.1:8000/agent \
 MCP tool calls are disabled by default. Agent endpoints can execute their own tools;
 use an isolated harness. A clean report is not proof that an agent is secure.
 
-Model-backed calibration is preview-only unless explicitly invoked with `--execute`.
-Provider charges may apply; see the [model calibration and data handling notes](docs/calibration.md#optional-model-backed-calibration).
+Model-backed calibration and planning are preview-only unless explicitly invoked with
+`--execute`; provider charges may apply. See the [model evaluation and planning notes](docs/calibration.md).
 
 Read the [CLI guide](docs/usage.md), [adapter contract](docs/integrations.md),
 [coverage and evidence limits](docs/coverage.md), [synthetic calibration](docs/calibration.md),
