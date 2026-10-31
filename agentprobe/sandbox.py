@@ -4,6 +4,7 @@ The planner is deliberately scripted. The dispatcher owns the independent audit;
 model text and returned telemetry cannot write to that audit.
 """
 
+import asyncio
 import json
 import re
 import threading
@@ -11,6 +12,7 @@ from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
+import httpx
 from pydantic import ConfigDict, Field, ValidationError
 
 from agentprobe.models import (
@@ -160,9 +162,10 @@ class FixtureAgent:
 
 
 class _Server(HTTPServer):
-    def __init__(self, port: int, dispatcher: Dispatcher) -> None:
+    def __init__(self, port: int, dispatcher: Dispatcher, agent: Any = None) -> None:
         self.dispatcher = dispatcher
         self.agent = FixtureAgent(dispatcher)
+        self.model_agent = agent
         super().__init__(("127.0.0.1", port), _Handler)
 
 
@@ -228,12 +231,27 @@ class _Handler(BaseHTTPRequestHandler):
             if not isinstance(data, dict):
                 raise ValueError
             if self.path == "/agent":
-                response = self.server.agent.respond(AgentInput.model_validate(data))
+                agent_input = AgentInput.model_validate(data)
+                if self.server.model_agent is None:
+                    response = self.server.agent.respond(agent_input)
+                else:
+                    loop = self.server.model_agent.loop
+                    pending = asyncio.run_coroutine_threadsafe(
+                        self.server.model_agent.respond(agent_input, self.server.dispatcher), loop
+                    )
+                    try:
+                        response = pending.result(timeout=self.server.model_agent.handler_timeout)
+                    except TimeoutError:
+                        pending.cancel()
+                        self.close_connection = True
+                        return
                 self._reply(200, response.model_dump())
             else:
                 self._mcp(data)
         except (ValueError, ValidationError, RecursionError):
             self._reply(400, {"error": "Invalid fixture request or exhausted audit capacity."})
+        except httpx.HTTPError:
+            self._reply(502, {"error": "Provider request failed; details withheld."})
         except (TimeoutError, ConnectionError):
             self.close_connection = True
 
@@ -311,10 +329,13 @@ class _Handler(BaseHTTPRequestHandler):
 class Sandbox:
     """Context-managed, single-threaded loopback server; all state is disposable."""
 
-    def __init__(self, mode: SandboxMode = SandboxMode.PROTECTED, port: int = 0) -> None:
+    def __init__(
+        self, mode: SandboxMode = SandboxMode.PROTECTED, port: int = 0, *, agent: Any = None
+    ) -> None:
         if not 0 <= port <= 65535:
             raise ValueError("port must be between 0 and 65535")
         self.dispatcher = Dispatcher(mode)
+        self.agent = agent
         self._port = port
         self._server: _Server | None = None
         self._thread: threading.Thread | None = None
@@ -328,7 +349,7 @@ class Sandbox:
     def __enter__(self) -> "Sandbox":
         if self._server is not None:
             raise RuntimeError("Sandbox is already running.")
-        server = _Server(self._port, self.dispatcher)
+        server = _Server(self._port, self.dispatcher, self.agent)
         thread = threading.Thread(
             target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
         )

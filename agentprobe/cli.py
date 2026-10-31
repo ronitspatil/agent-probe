@@ -17,6 +17,12 @@ from rich.text import Text
 from agentprobe.calibration import run_calibration
 from agentprobe.demo import demo_transport
 from agentprobe.evaluators import DetectionEngine, SentenceTransformerProvider
+from agentprobe.model_eval import (
+    ModelSettings,
+    model_corpus,
+    preview_request_budget,
+    run_model_evaluation,
+)
 from agentprobe.models import MCPFixture, PayloadCategory, ScanConfig, VulnerabilityReport
 from agentprobe.payloads import build_registry
 from agentprobe.reporting import exit_code, render_report, write_report
@@ -325,3 +331,101 @@ def calibrate(
         console.print(Text(limitation))
     console.print(Text(f"Report saved to {output}"))
     raise typer.Exit(report.exit_code)
+
+
+@app.command("calibrate-model")
+def calibrate_model(
+    endpoint: Annotated[
+        str, typer.Option(help="OpenAI-compatible /chat/completions endpoint URL.")
+    ],
+    model: Annotated[str, typer.Option(help="Provider model identifier.")],
+    output: Annotated[Path, typer.Option(help="Owner-readable JSON report destination.")] = Path(
+        "model-calibration.json"
+    ),
+    execute: Annotated[
+        bool,
+        typer.Option(help="Send provider requests; without this flag the command is preview-only."),
+    ] = False,
+    credential_env: Annotated[
+        str, typer.Option(help="Environment variable containing provider API credential.")
+    ] = "AGENTPROBE_API_KEY",
+    temperature: Annotated[float, typer.Option(min=0.0, max=2.0)] = 0.0,
+    top_p: Annotated[float, typer.Option(min=0.001, max=1.0)] = 1.0,
+    max_tokens: Annotated[int, typer.Option(min=1, max=4096)] = 256,
+    seed: Annotated[int | None, typer.Option(min=0, max=2**31 - 1)] = None,
+    request_timeout: Annotated[float, typer.Option(min=0.1, max=120.0)] = 30.0,
+    max_tool_rounds: Annotated[int, typer.Option(min=0, max=2)] = 1,
+    repetitions: Annotated[int, typer.Option(min=1, max=10)] = 1,
+    scenario: Annotated[
+        list[str] | None, typer.Option(help="Scenario ID; repeat to select more than one.")
+    ] = None,
+    mode: Annotated[
+        SandboxMode, typer.Option(help="Isolated sink enforcement mode: protected or vulnerable.")
+    ] = SandboxMode.PROTECTED,
+) -> None:
+    """Repeat fixed model probes through a local in-memory synthetic sink."""
+    selected = scenario or [name for name, _ in model_corpus()]
+    available = {name for name, _ in model_corpus()}
+    if set(selected) - available:
+        raise typer.BadParameter(f"Scenario must be one of: {', '.join(sorted(available))}.")
+    if len(selected) != len(set(selected)):
+        raise typer.BadParameter("Do not select the same scenario more than once.")
+    try:
+        settings = ModelSettings(
+            endpoint=endpoint,
+            model=model,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            seed=seed,
+            request_timeout=request_timeout,
+            max_tool_rounds=max_tool_rounds,
+        )
+        max_turns = max(len(dict(model_corpus())[name].turns) for name in selected)
+        budget = preview_request_budget(len(selected), repetitions, max_tool_rounds, max_turns)
+    except (ValueError, KeyError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(
+        Text(
+            f"Model: {model}; mode: {mode.value}; samples: {len(selected) * repetitions}; "
+            f"maximum provider requests: {budget}; max tokens/request: {max_tokens}; "
+            f"maximum generated-token ceiling: {budget * max_tokens}; "
+            f"provider timeout/request: {request_timeout:g}s."
+        )
+    )
+    if not execute:
+        console.print("Preview only. Add --execute to send requests; provider charges may apply.")
+        return
+    try:
+        token = load_token(credential_env)
+        if not token:
+            raise ValueError(
+                f"Credential environment variable {credential_env!r} is unset or empty."
+            )
+        report = asyncio.run(
+            run_model_evaluation(
+                settings,
+                token=token,
+                scenarios=selected,
+                repetitions=repetitions,
+                mode=mode,
+            )
+        )
+        write_report(report, output)
+    except Exception as exc:
+        console.print(Text(f"Model evaluation failed: {safe_error(exc)}"))
+        raise typer.Exit(2) from exc
+    table = Table("Scenario", "Repeat", "Scanner", "Model Calls", "Dispatcher", "Unauthorized")
+    for sample in report.samples:
+        table.add_row(
+            sample.scenario,
+            str(sample.repetition),
+            sample.observation.status.value,
+            str(sum(len(trace.tool_names) for trace in sample.provider_traces)),
+            str(len(sample.oracle_records)),
+            str(sum(record.executed and not record.authorized for record in sample.oracle_records)),
+        )
+    console.print(table)
+    console.print(Text(f"Report saved to {output}; metrics: {report.metrics}"))
+    if report.metrics["incomplete"]:
+        raise typer.Exit(2)
