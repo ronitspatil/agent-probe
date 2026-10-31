@@ -146,7 +146,8 @@ async def test_malformed_decision_fails_closed_and_keeps_error_redacted() -> Non
     report = await run_model_plan(settings(), token="secret", max_steps=1, client=client)
     await client.aclose()
 
-    assert report.error == "Planner response did not match the decision schema."
+    assert report.error == "Test failed (ValueError); response details withheld."
+    assert "payload" not in report.error
     assert report.steps == []
     assert report.provider_traces[0].completed is False
 
